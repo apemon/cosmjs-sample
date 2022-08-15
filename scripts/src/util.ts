@@ -1,9 +1,11 @@
-import { CosmWasmClient, SigningCosmWasmClient } from '@cosmjs/cosmwasm-stargate'
+import { CosmWasmClient, SigningCosmWasmClient, MsgExecuteContractEncodeObject } from '@cosmjs/cosmwasm-stargate'
 import { Decimal } from '@cosmjs/math'
-import { DirectSecp256k1HdWallet } from '@cosmjs/proto-signing'
-import { GasPrice, parseCoins } from '@cosmjs/stargate'
+import { DirectSecp256k1HdWallet, EncodeObject } from '@cosmjs/proto-signing'
+import { GasPrice, parseCoins, isDeliverTxFailure, DeliverTxResponse, logs } from '@cosmjs/stargate'
 import { StdFee, Coin } from '@cosmjs/amino'
+import { MsgExecuteContract } from "cosmjs-types/cosmwasm/wasm/v1/tx"
 import * as fs from 'fs'
+import { toUtf8 } from "@cosmjs/encoding";
 
 require('dotenv').config()
 
@@ -99,6 +101,46 @@ export const execute = async (
     return response;
 }
 
+export const constructMsgExecuteContractEncoded = (
+    senderAddress: string,
+    contractAddress: string,
+    execute_msg: any,
+    coinString?
+): MsgExecuteContractEncodeObject => {
+    let coins: Coin[] = []
+    if (coinString) {
+        coins = parseCoins(coinString)
+    }
+    const msg: MsgExecuteContractEncodeObject = {
+        typeUrl: '/cosmwasm.wasm.v1.MsgExecuteContract',
+        value: MsgExecuteContract.fromPartial({
+            sender: senderAddress,
+            contract: contractAddress,
+            msg: toUtf8(JSON.stringify(execute_msg)),
+            funds: coins
+        })
+    }
+    return msg
+}
+
+export const batchExecuteRaw = async (
+    senderAddress: string,
+    wallet: SigningCosmWasmClient,
+    execute_msgs: EncodeObject[],
+) => {
+    const result = await wallet.signAndBroadcast(senderAddress, execute_msgs, 'auto')
+    if (isDeliverTxFailure(result)) {
+        throw new Error(createDeliverTxResponseErrorMessage(result));
+    }
+    return {
+        logs: logs.parseRawLog(result.rawLog),
+        height: result.height,
+        transactionHash: result.transactionHash,
+        gasWanted: result.gasWanted,
+        gasUsed: result.gasUsed,
+    };
+}
+
 export const query = async (wallet: SigningCosmWasmClient, address: string, msg: any) => {
     const response = await wallet.queryContractSmart(address, msg)
     return response
@@ -106,4 +148,8 @@ export const query = async (wallet: SigningCosmWasmClient, address: string, msg:
 
 export const delay = (ms) => {
     return new Promise(resolve => setTimeout(resolve, ms, {}))
+}
+
+function createDeliverTxResponseErrorMessage(result: DeliverTxResponse): string {
+    return `Error when broadcasting tx ${result.transactionHash} at height ${result.height}. Code: ${result.code}; Raw log: ${result.rawLog}`;
 }
